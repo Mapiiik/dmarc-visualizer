@@ -1,4 +1,5 @@
+/.env
+/parsedmarc.env
+/data/
+/compose.override.yaml
 .DS_Store
-/files/
-/output_files/
-

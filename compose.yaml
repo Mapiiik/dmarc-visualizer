@@ -1,0 +1,200 @@
+name: ${COMPOSE_PROJECT_NAME:-dmarc}
+
+# Where parsedmarc stores what it parses: OpenSearch, one index per month and report type
+x-parsedmarc-output: &parsedmarc-output
+  PARSEDMARC_OPENSEARCH_HOSTS: opensearch:9200
+  PARSEDMARC_OPENSEARCH_SSL: "false"
+  PARSEDMARC_OPENSEARCH_MONTHLY_INDEXES: "true"
+  PARSEDMARC_OPENSEARCH_NUMBER_OF_REPLICAS: "0"
+  PARSEDMARC_GENERAL_SAVE_AGGREGATE: "true"
+  PARSEDMARC_GENERAL_SAVE_FAILURE: "true"
+  PARSEDMARC_GENERAL_SAVE_SMTP_TLS: "true"
+
+# The mailbox the reports arrive in
+x-parsedmarc-mailbox: &parsedmarc-mailbox
+  PARSEDMARC_IMAP_HOST: ${IMAP_HOST:?set IMAP_HOST in .env}
+  PARSEDMARC_IMAP_PORT: ${IMAP_PORT:-993}
+  PARSEDMARC_IMAP_USER: ${IMAP_USER:?set IMAP_USER in .env}
+  PARSEDMARC_IMAP_PASSWORD: ${IMAP_PASSWORD:?set IMAP_PASSWORD in .env}
+  PARSEDMARC_MAILBOX_ARCHIVE_FOLDER: ${ARCHIVE_FOLDER:-Archive}
+
+services:
+  # OpenSearch runs as uid 1000 and Grafana as 472; hands them their directories, which Docker
+  # creates as root
+  permissions:
+    image: opensearchproject/opensearch:3
+    user: "0"
+    entrypoint: ["sh", "-c", "chown -R 1000:1000 /opensearch && chown -R 472:0 /grafana"]
+    network_mode: none
+    volumes:
+      - ${DATA_DIR:-./data}/opensearch:/opensearch
+      - ${DATA_DIR:-./data}/grafana:/grafana
+
+  # Only parsedmarc, Grafana and the retention reach it, without security: it is on no network
+  # that leads anywhere else.
+  # Pinned to a major version: indexes from two majors back cannot be opened, so the next one may
+  # need the data reindexed or parsed again from the mailbox archive
+  opensearch:
+    image: opensearchproject/opensearch:3
+    restart: unless-stopped
+    labels:
+      com.centurylinklabs.watchtower.enable: "true"
+    depends_on:
+      permissions:
+        condition: service_completed_successfully
+    environment:
+      discovery.type: single-node
+      DISABLE_SECURITY_PLUGIN: "true"
+      DISABLE_INSTALL_DEMO_CONFIG: "true"
+      OPENSEARCH_JAVA_OPTS: -Xms${OPENSEARCH_HEAP:-512m} -Xmx${OPENSEARCH_HEAP:-512m}
+    volumes:
+      - ${DATA_DIR:-./data}/opensearch:/usr/share/opensearch/data
+    networks:
+      - backend
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fs 'http://localhost:9200/_cluster/health?wait_for_status=yellow&timeout=5s' >/dev/null"]
+      interval: 10s
+      timeout: 10s
+      retries: 30
+      start_period: 60s
+
+  # Watches the mailbox, parses new reports into OpenSearch and moves them to the archive folder
+  parsedmarc:
+    image: ghcr.io/domainaware/parsedmarc:latest
+    restart: unless-stopped
+    labels:
+      com.centurylinklabs.watchtower.enable: "true"
+    depends_on:
+      opensearch:
+        condition: service_healthy
+    # Any other parsedmarc setting, as PARSEDMARC_{SECTION}_{KEY}
+    env_file:
+      - path: parsedmarc.env
+        required: false
+    environment:
+      <<: [*parsedmarc-output, *parsedmarc-mailbox]
+      PARSEDMARC_MAILBOX_REPORTS_FOLDER: ${REPORTS_FOLDER:-INBOX}
+      PARSEDMARC_MAILBOX_WATCH: "true"
+    networks:
+      - backend
+      - default
+
+  # Parses again what parsedmarc archived, without moving anything. Reports already stored are
+  # skipped, so it can be run more than once. One folder per run, see the README.
+  archive-import:
+    profiles: [archive-import]
+    image: ghcr.io/domainaware/parsedmarc:latest
+    depends_on:
+      opensearch:
+        condition: service_healthy
+    env_file:
+      - path: parsedmarc.env
+        required: false
+    environment:
+      <<: [*parsedmarc-output, *parsedmarc-mailbox]
+      PARSEDMARC_MAILBOX_REPORTS_FOLDER: ${ARCHIVE_FOLDER:-Archive}/Aggregate
+      PARSEDMARC_MAILBOX_TEST: "true"
+      PARSEDMARC_MAILBOX_WATCH: "false"
+      # The whole folder in one run: a smaller batch ends the run after it, since nothing is moved
+      PARSEDMARC_MAILBOX_BATCH_SIZE: "0"
+    networks:
+      - backend
+      - default
+
+  # The sample reports in samples/, to try the dashboards without a mailbox
+  samples:
+    profiles: [samples]
+    image: ghcr.io/domainaware/parsedmarc:latest
+    depends_on:
+      opensearch:
+        condition: service_healthy
+    entrypoint: ["find", "/samples", "-type", "f", "-exec", "parsedmarc", "{}", "+"]
+    environment:
+      <<: *parsedmarc-output
+      PARSEDMARC_GENERAL_OFFLINE: "true"
+    volumes:
+      - ${SAMPLES_DIR:-./samples}:/samples:ro
+    networks:
+      - backend
+
+  # Deletes reports older than RETENTION_*_DAYS, once a day
+  retention:
+    image: opensearchproject/opensearch:3
+    restart: unless-stopped
+    init: true
+    depends_on:
+      opensearch:
+        condition: service_healthy
+    entrypoint: ["bash", "/retention.sh"]
+    environment:
+      RETENTION_AGGREGATE_DAYS: ${RETENTION_AGGREGATE_DAYS:-365}
+      RETENTION_SMTP_TLS_DAYS: ${RETENTION_SMTP_TLS_DAYS:-365}
+      RETENTION_FAILURE_DAYS: ${RETENTION_FAILURE_DAYS:-90}
+    volumes:
+      - ./opensearch/retention.sh:/retention.sh:ro
+    networks:
+      - backend
+
+  grafana:
+    image: grafana/grafana:latest
+    restart: unless-stopped
+    labels:
+      com.centurylinklabs.watchtower.enable: "true"
+    depends_on:
+      opensearch:
+        condition: service_healthy
+    environment:
+      GF_SERVER_ROOT_URL: https://${SERVER_NAME:?set SERVER_NAME in .env}/
+      # The first administrator, created on the first start only
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?set GRAFANA_ADMIN_PASSWORD in .env}
+      GF_SECURITY_COOKIE_SECURE: "true"
+      GF_SECURITY_DISABLE_GRAVATAR: "true"
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+      GF_ANALYTICS_CHECK_FOR_PLUGIN_UPDATES: "false"
+      GF_NEWS_NEWS_FEED_ENABLED: "false"
+      GF_PLUGINS_PREINSTALL_SYNC: grafana-opensearch-datasource
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /etc/grafana/dashboards/dmarc-reports.json
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/etc/grafana/dashboards:ro
+      - ${DATA_DIR:-./data}/grafana:/var/lib/grafana
+    networks:
+      - backend
+      - default
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:3000/api/health >/dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 60s
+
+  # TLS and certificates; ports or the proxy network come from compose.direct.yaml,
+  # compose.behind-proxy.yaml or compose.internal.yaml
+  caddy:
+    image: ghcr.io/mapiiik/caddy:2
+    restart: unless-stopped
+    labels:
+      com.centurylinklabs.watchtower.enable: "true"
+    depends_on:
+      grafana:
+        condition: service_healthy
+    environment:
+      SERVER_NAME: ${SERVER_NAME}
+      UPSTREAM: grafana:3000
+      CADDY_GLOBAL_OPTIONS: email ${ACME_EMAIL:?set ACME_EMAIL in .env}
+      ACCESS: ${ACCESS:-admins-only}
+      ADMIN_IPS: ${ADMIN_IPS:-}
+      RATE_LIMIT: "on"
+      RATE_LIMIT_PATHS: /login
+      PROXY_ALLOW: ${PROXY_ALLOW:-127.0.0.1/32 ::1/128}
+    volumes:
+      - ${DATA_DIR:-./data}/caddy/data:/data
+      - ${DATA_DIR:-./data}/caddy/config:/config
+
+networks:
+  # Leads nowhere: OpenSearch and the services that use it
+  backend:
+    internal: true

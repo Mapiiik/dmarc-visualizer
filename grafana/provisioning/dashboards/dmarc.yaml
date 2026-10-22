@@ -1,0 +1,11 @@
+# The dashboards come from grafana/dashboards in the repository. Changes made in Grafana cannot be
+# saved over them: copy the JSON model into the file instead (see the README).
+apiVersion: 1
+
+providers:
+  - name: dmarc
+    type: file
+    disableDeletion: true
+    allowUiUpdates: false
+    options:
+      path: /etc/grafana/dashboards

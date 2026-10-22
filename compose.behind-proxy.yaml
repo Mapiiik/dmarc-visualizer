@@ -1,0 +1,17 @@
+# Caddy sits behind a proxy that routes TLS by SNI, in the proxy's network, under an alias the
+# proxy knows it by. No ports are published.
+services:
+  caddy:
+    environment:
+      LISTENER_MODE: behind-proxy
+      PROXY_ALLOW: ${PROXY_ALLOW:?set PROXY_ALLOW to the network the proxy connects from}
+    networks:
+      default:
+      ingress:
+        aliases:
+          - ${INGRESS_ALIAS:?name the alias the proxy reaches this server by}
+
+networks:
+  ingress:
+    name: ${INGRESS_NETWORK:-ingress}
+    external: true

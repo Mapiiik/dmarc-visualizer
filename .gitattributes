@@ -1,0 +1,6 @@
+* text=auto eol=lf
+*.png binary
+*.gz binary
+*.zip binary
+# The sample reports stay byte for byte as they came, some test CRLF line ends
+samples/** -text

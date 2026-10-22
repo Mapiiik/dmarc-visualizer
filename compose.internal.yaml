@@ -1,0 +1,10 @@
+# Only on an internal network: Caddy publishes ports 80 and 443 there and issues the certificate from
+# its own CA.
+services:
+  caddy:
+    environment:
+      LISTENER_MODE: internal
+    ports:
+      - "${HTTP_PORT:-80}:80"
+      - "${HTTPS_PORT:-443}:443"
+      - "${HTTPS_PORT:-443}:443/udp"

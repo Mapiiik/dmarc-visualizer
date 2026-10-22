@@ -1,86 +1,137 @@
 # DMARC Visualizer
 
-Visualize DMARC results using open-source tools.
+The DMARC reports the domains get, in charts: [parsedmarc](https://github.com/domainaware/parsedmarc)
+reads aggregate, failure and SMTP TLS reports from a mailbox into OpenSearch, Grafana shows them, Caddy
+keeps the certificate and the administrators' address list. Standalone on its own address, behind an
+SNI proxy with the PROXY protocol like the other services, or only on an internal network.
 
-* [parsedmarc](https://github.com/domainaware/parsedmarc) for parsing DMARC reports,
-* [Elasticsearch](https://www.elastic.co/) to store aggregated data.
-* [Grafana](https://grafana.com/) to visualize the aggregated reports.
+Everything runs from the official images, nothing is built here. OpenSearch is on a network of its own
+that leads nowhere, without its security plugin; only parsedmarc, Grafana and the retention reach it.
 
-See the full blog post with the original instructions at [Debricked](https://debricked.com/blog/2020/05/14/analyse-and-visualize-dmarc-results-using-open-source-tools/).
+## Origin
 
-## Updates from original repository
+A fork of [LukeCallaghan/dmarc-visualizer](https://github.com/LukeCallaghan/dmarc-visualizer), itself
+built on the original from [Debricked](https://debricked.com/blog/2020/05/14/analyse-and-visualize-dmarc-results-using-open-source-tools/).
+Little of it is left: Elasticsearch gave way to OpenSearch, the images built here to the official ones,
+`parsedmarc.ini` to environment variables. The dashboard is parsedmarc's own
+(`dashboards/grafana`, contributed by Bhozar), adapted to OpenSearch by `grafana/update-dashboard.py`.
+Apache License 2.0, like both.
 
-* parsedmarc
-  * Running from python 3.11
-  * Built in the geoip functions with cron running updates.
-  * Runs in verbose mode by default.
-  * Delayed start by waiting for Elasticsearch to report service healthy.
+## Setup
 
-* Grafana
-  * Updated to recent release version - 11.6.0 (Upgrades to 10.2.x are causing errors that are yet to be resolved - THIS IS NOT CONFIRMED IN 11.6.0 YET).
-  * Uses a docker volume for data persistence.
-  * Delayed start by waiting for Elasticsearch to report service healthy.
-  * grafana-piechart-panel plugin is deprecated so has been removed and panel converted to the new builtin Piechart.
-  * grafana-worldmap-panel plugin is deprecated so has been removed and panel converted to the new builtin Geomap.
-
-* Elasticsearch
-  * Updated to current release version - 8.18.0.
-  * Uses a docker volume for data persistence.
-  * Runs health check to report service healthy, forcing other containers to wait until initialised.
-
-* Other
-  * Containers are networked with manual IP addressing.
-  * Added sample files for testing functionality without needing to connect to an actual mailbox.
-
-## KNOWN ISSUES
-
-* Some of the Dockerfile steps to add customisations to the Grafana interface break the build process when using Synology versions of Docker (called Container Manager). I have not been able to replicate this issue on macOS or Ubuntu using the same versions of Docker, and I do not have Synology to test on. To resolve this you will need to comment out lines 27-29, 72-77 and 89-91 in `grafana/Dockerfile`. (Issue reported, and workaround found, by supaeasy @ [#1](https://github.com/LukeCallaghan/dmarc-visualizer/issues/1#issuecomment-1872215466), cheers!)
-
-## Instructions
-
-```shell
-git clone https://github.com/LukeCallaghan/dmarc-visualizer.git
-cd dmarc-visualizer
-docker-compose build
-docker-compose up -d
+```sh
+cp .env.example .env    # fill it in
+docker compose up -d
+docker compose logs -f parsedmarc
 ```
 
-The containers will start and can take a while to get running.
+OpenSearch runs as uid 1000 and Grafana as 472. The short-lived `permissions` service hands them their
+directories before they start, they are created as root otherwise.
 
-Visit `http://localhost:3000/` in your browser. Default username and password is admin. This can be edited and will persist.
+Grafana's administrator comes from `GRAFANA_ADMIN_*` on the first start only. Log in and change the
+password; changing `.env` later changes nothing. The login is limited to 10 attempts a minute per
+address by Caddy, on top of Grafana's own lockout.
 
-## Configuration
+OpenSearch takes `OPENSEARCH_HEAP` (512 MB) for itself and the container about twice that. A few years
+of reports for a handful of domains are a few hundred MB on disk.
 
-Configuration options are available for each of the services.
+## The mailbox
 
-### parsedmarc
+The domains' DMARC records send the reports to the mailbox in `IMAP_USER`
+(`rua=mailto:…; ruf=mailto:…`), a TLS-RPT record (`_smtp._tls`, `v=TLSRPTv1; rua=mailto:…`) the
+SMTP TLS reports. parsedmarc watches `REPORTS_FOLDER` and moves what it parsed to
+`ARCHIVE_FOLDER/Aggregate`, `/Failure`, `/SMTP-TLS` or `/Invalid`. parsedmarc before 10.0 archived
+failure reports in `/Forensic`, the first start moves them to `/Failure`.
 
-parsedmarc can be configured in the parsedmarc.ini file. There are common options included in the file already.
+Any other parsedmarc setting goes to `parsedmarc.env` (ignored by git) as
+`PARSEDMARC_{SECTION}_{KEY}=value`, see the
+[parsedmarc documentation](https://domainaware.github.io/parsedmarc/usage.html#configuration-file).
 
-PARSEDMARC NOW RUNS IN OFFLINE MODE BY DEFAULT - THIS MUST BE COMMENTED IN THE CONFIG TO BE ONLINE.
+## How long reports are kept
 
-For a full list of options and information about their use, please visit the [config section of the parsedmarc documentation](https://domainaware.github.io/parsedmarc/usage.html#configuration-file)
+The `retention` service deletes reports older than `RETENTION_AGGREGATE_DAYS` (365),
+`RETENTION_SMTP_TLS_DAYS` (365) and `RETENTION_FAILURE_DAYS` (90), at start and then once a day; 0 keeps
+them for good. A report's age is counted from the day it begins (aggregate, SMTP TLS) or the day the
+message arrived (failure). An index whose whole month is past the limit goes at once, the oldest month
+that is not report by report. It logs what it deleted:
 
-#### Geo IP
+```sh
+docker compose logs retention
+```
 
-To enable Geo IP you will need to complete the requirements outlined in the [geoipupdate section of the parsedmarc documentation](https://domainaware.github.io/parsedmarc/installation.html#geoipupdate-setup)
+Failure reports carry the headers of real messages, with their senders and recipients, so they are
+kept the shortest. The mailbox archive is not touched: what is to go from there, empty in the mailbox.
 
-Once you have your license key file, you can update the GeoIP.conf file with your license details and remove the comments so the geoip functionality will work.
+## Parsing the archive again
 
-### Elasticseach
+A new installation, or OpenSearch lost: `archive-import` parses a folder of the archive again without
+moving anything. Reports already stored are skipped, so a run can be repeated. One folder per run, the
+whole folder at once (thousands of reports take a while, mostly DNS lookups):
 
-If you are getting errors in your dashboard regarding memory issues, then you need to increase the memory available to the Elasticsearch instance. In the docker-compose file, you can change the line below to increase the memory:
+```sh
+docker compose run --rm archive-import
+docker compose run --rm -e PARSEDMARC_MAILBOX_REPORTS_FOLDER=Archive/Failure archive-import
+docker compose run --rm -e PARSEDMARC_MAILBOX_REPORTS_FOLDER=Archive/SMTP-TLS archive-import
+```
 
-`- "ES_JAVA_OPTS=-Xms512m -Xms512m"`
+The first parses `Archive/Aggregate`. The retention then deletes what is older than its limits.
 
-For example, to use 1Gb of memory you would use:
+## The dashboard
 
-`- "ES_JAVA_OPTS=-Xms1024m -Xms1024m"`
+`grafana/dashboards/dmarc-reports.json` is the home page. It is provisioned from the repository, so a
+change made in Grafana cannot be saved over it: edit the panel, then copy the JSON model (dashboard
+settings → JSON Model) into the file. Grafana reads it again within seconds, or on a restart.
 
-### Grafana
+The data sources are provisioned too: `dmarc-ag` for aggregate reports, `dmarc-fo` for failure reports,
+`smtp-tls` for Explore. Their "Test" button reports "Index not found" because of the wildcard in the
+index name; the plugin looks for the pattern itself among the indexes it finds. The queries work.
 
-Customisation of the Grafana interface is done by following the guide from [Volkov Labs](https://volkovlabs.io/blog/how-to-customize-the-grafana-user-interface-8d70a42dc2b6/)
+parsedmarc keeps improving its dashboard. To take a newer one:
 
-## Screenshot
+```sh
+python3 grafana/update-dashboard.py        # or a tag or commit of parsedmarc
+```
 
-![Screenshot of Grafana dashboard](/big_screenshot.png)
+It points the data source variables at OpenSearch, turns off the automatic refresh and fixes the
+"Failure Samples" table, which groups by a column title instead of a field upstream. Name the
+parsedmarc commit it prints in the commit message. Changes of our own to the dashboard would be lost by
+this; make them in the script, like those.
+
+## Trying it without a mailbox
+
+`samples/` holds parsedmarc's sample reports. They are from the past, so set the time range to the last
+15 years and the retention to 0:
+
+```sh
+docker compose up -d opensearch grafana caddy
+docker compose run --rm samples
+```
+
+## Firewall
+
+Standalone, Caddy obtains the certificate over port 80, which therefore has to be open from the
+internet. Port 443 can be limited to `ADMIN_IPS` on the firewall as well. parsedmarc needs IMAP out to
+the mailbox and DNS, Grafana HTTPS to grafana.com for its plugins.
+
+Only on an internal network (`compose.internal.yaml`), nothing has to be open from the internet: Caddy
+issues the certificate from its own CA, which lives in `DATA_DIR` with the rest. `SERVER_NAME` can be
+the server's IP address. Browsers warn until they trust its root certificate,
+`data/caddy/data/caddy/pki/authorities/local/root.crt`; on Windows
+`certutil -addstore -user Root root.crt`.
+
+## Backups
+
+The reports can be parsed again from the mailbox archive (see above), so OpenSearch need not be backed
+up. Grafana's database holds the users. Back up `DATA_DIR` without `opensearch/`.
+
+## Updates
+
+The services carry the label `com.centurylinklabs.watchtower.enable`, so a Watchtower running with
+`WATCHTOWER_LABEL_ENABLE` on the host keeps them current. parsedmarc and Grafana follow `latest`, major
+releases included, read their notes when one comes. OpenSearch stays on major version 3: indexes from
+two majors back cannot be opened, so before the next one, parse the archive again into a new
+installation. By hand:
+
+```sh
+docker compose pull && docker compose up -d && docker image prune -f
+```

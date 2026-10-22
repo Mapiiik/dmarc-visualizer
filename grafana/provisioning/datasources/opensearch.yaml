@@ -1,0 +1,44 @@
+# The dashboard picks its data sources by these names: dmarc-ag for aggregate reports, dmarc-fo for
+# failure reports (dmarc_f* covers dmarc_forensic from before parsedmarc 10.0 as well)
+apiVersion: 1
+
+datasources:
+  - name: dmarc-ag
+    uid: dmarc-ag
+    type: grafana-opensearch-datasource
+    access: proxy
+    url: http://opensearch:9200
+    editable: false
+    jsonData:
+      database: dmarc_aggregate*
+      timeField: date_begin
+      flavor: opensearch
+      version: 3.0.0
+      maxConcurrentShardRequests: 5
+
+  - name: dmarc-fo
+    uid: dmarc-fo
+    type: grafana-opensearch-datasource
+    access: proxy
+    url: http://opensearch:9200
+    editable: false
+    jsonData:
+      database: dmarc_f*
+      timeField: arrival_date
+      flavor: opensearch
+      version: 3.0.0
+      maxConcurrentShardRequests: 5
+
+  # Not on the dashboard, for Explore
+  - name: smtp-tls
+    uid: smtp-tls
+    type: grafana-opensearch-datasource
+    access: proxy
+    url: http://opensearch:9200
+    editable: false
+    jsonData:
+      database: smtp_tls*
+      timeField: date_begin
+      flavor: opensearch
+      version: 3.0.0
+      maxConcurrentShardRequests: 5
