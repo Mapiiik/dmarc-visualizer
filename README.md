@@ -33,6 +33,8 @@ throwaway one. Log in and change it, then remove `GRAFANA_ADMIN_PASSWORD` from `
 `docker compose up -d`: the container keeps it in its environment until it is recreated. A lost
 password is reset with `docker compose exec grafana grafana cli admin reset-admin-password <new>`.
 The login is limited to 10 attempts a minute per address by Caddy, on top of Grafana's own lockout.
+A login lasts 15 minutes without activity and 8 hours at most (`GRAFANA_IDLE_TIMEOUT`,
+`GRAFANA_MAX_LOGIN`).
 
 ### Login through Authentik
 
@@ -48,7 +50,9 @@ Authentik:
 
 Then `OIDC_ENABLED=true`, `OIDC_PROVIDER_URL`, `OIDC_CLIENT_ID` and `OIDC_CLIENT_SECRET` in `.env`
 (`OIDC_LOGOUT_URL` to log out of Authentik too) and `docker compose up -d`. Grafana creates the user
-at the first login and sets the role from the groups at every login. Someone in neither group is
+at the first login and sets the role from the groups at every login. Authentik asks for the login
+again each time (`OIDC_LOGIN_PROMPT=login`): otherwise its own session would let the user back in
+after Grafana's idle timeout without anything entered. Someone in neither group is
 refused, and so is a token without groups. The local administrator still logs in with the password:
 keep it as the way in when Authentik is down. With `OIDC_AUTO_LOGIN=true` the login page is skipped,
 the local login is then at `/login?disableAutoLogin`.

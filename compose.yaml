@@ -158,6 +158,10 @@ services:
       GF_NEWS_NEWS_FEED_ENABLED: "false"
       GF_PLUGINS_PREINSTALL_SYNC: grafana-opensearch-datasource
       GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /etc/grafana/dashboards/dmarc-reports.json
+      # A login lasts until GRAFANA_IDLE_TIMEOUT without activity, GRAFANA_MAX_LOGIN at most. Grafana
+      # is for administrators, so a short idle timeout.
+      GF_AUTH_LOGIN_MAXIMUM_INACTIVE_LIFETIME_DURATION: ${GRAFANA_IDLE_TIMEOUT:-15m}
+      GF_AUTH_LOGIN_MAXIMUM_LIFETIME_DURATION: ${GRAFANA_MAX_LOGIN:-8h}
       # Login through OpenID Connect with Authentik, off unless OIDC_ENABLED=true. The groups decide:
       # OIDC_ADMIN_GROUP becomes Admin, OIDC_VIEWER_GROUP Viewer, anyone else is refused. The local
       # administrator stays as the way in when Authentik is down.
@@ -176,6 +180,9 @@ services:
       GF_AUTH_GENERIC_OAUTH_EMAIL_ATTRIBUTE_PATH: email
       GF_AUTH_GENERIC_OAUTH_ROLE_ATTRIBUTE_PATH: "contains(groups[*], '${OIDC_ADMIN_GROUP:-Grafana Admins}') && 'Admin' || contains(groups[*], '${OIDC_VIEWER_GROUP:-Grafana Viewers}') && 'Viewer'"
       GF_AUTH_GENERIC_OAUTH_ROLE_ATTRIBUTE_STRICT: "true"
+      # Authentik asks for the login again each time, so that a running Authentik session does not let
+      # the user back in after Grafana's idle timeout without anything entered
+      GF_AUTH_GENERIC_OAUTH_LOGIN_PROMPT: ${OIDC_LOGIN_PROMPT-login}
       GF_AUTH_OAUTH_AUTO_LOGIN: ${OIDC_AUTO_LOGIN:-false}
       GF_AUTH_SIGNOUT_REDIRECT_URL: ${OIDC_LOGOUT_URL:-}
     volumes:
