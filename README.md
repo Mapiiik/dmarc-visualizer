@@ -28,9 +28,11 @@ docker compose logs -f parsedmarc
 OpenSearch runs as uid 1000 and Grafana as 472. The short-lived `permissions` service hands them their
 directories before they start, they are created as root otherwise.
 
-Grafana's administrator comes from `GRAFANA_ADMIN_*` on the first start only. Log in and change the
-password; changing `.env` later changes nothing. The login is limited to 10 attempts a minute per
-address by Caddy, on top of Grafana's own lockout.
+Grafana's administrator comes from `GRAFANA_ADMIN_*` on the first start only, so make the password a
+throwaway one. Log in and change it, then remove `GRAFANA_ADMIN_PASSWORD` from `.env` and run
+`docker compose up -d`: the container keeps it in its environment until it is recreated. A lost
+password is reset with `docker compose exec grafana grafana cli admin reset-admin-password <new>`.
+The login is limited to 10 attempts a minute per address by Caddy, on top of Grafana's own lockout.
 
 OpenSearch takes `OPENSEARCH_HEAP` (512 MB) for itself and the container about twice that. A few years
 of reports for a handful of domains are a few hundred MB on disk.
