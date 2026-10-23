@@ -34,6 +34,25 @@ throwaway one. Log in and change it, then remove `GRAFANA_ADMIN_PASSWORD` from `
 password is reset with `docker compose exec grafana grafana cli admin reset-admin-password <new>`.
 The login is limited to 10 attempts a minute per address by Caddy, on top of Grafana's own lockout.
 
+### Login through Authentik
+
+Grafana can take its users from Authentik over OpenID Connect instead of keeping its own. In
+Authentik:
+
+1. an OAuth2/OpenID provider: confidential client, redirect URI
+   `https://<SERVER_NAME>/login/generic_oauth` (strict), the default scopes (`openid`, `profile`, which
+   carries the groups, and `email`);
+2. an application for it, such as with the slug `dmarc`, bound to the groups that may use it;
+3. the groups: `Grafana Admins`, and `Grafana Viewers` if someone only looks (other names go to
+   `OIDC_ADMIN_GROUP` and `OIDC_VIEWER_GROUP`).
+
+Then `OIDC_ENABLED=true`, `OIDC_PROVIDER_URL`, `OIDC_CLIENT_ID` and `OIDC_CLIENT_SECRET` in `.env`
+(`OIDC_LOGOUT_URL` to log out of Authentik too) and `docker compose up -d`. Grafana creates the user
+at the first login and sets the role from the groups at every login. Someone in neither group is
+refused, and so is a token without groups. The local administrator still logs in with the password:
+keep it as the way in when Authentik is down. With `OIDC_AUTO_LOGIN=true` the login page is skipped,
+the local login is then at `/login?disableAutoLogin`.
+
 OpenSearch takes `OPENSEARCH_HEAP` (512 MB) for itself and the container about twice that. A few years
 of reports for a handful of domains are a few hundred MB on disk.
 
