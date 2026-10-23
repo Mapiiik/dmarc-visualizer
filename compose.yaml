@@ -160,8 +160,8 @@ services:
       GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /etc/grafana/dashboards/dmarc-reports.json
       # A login lasts until GRAFANA_IDLE_TIMEOUT without activity, GRAFANA_MAX_LOGIN at most. Grafana
       # is for administrators, so a short idle timeout.
-      GF_AUTH_LOGIN_MAXIMUM_INACTIVE_LIFETIME_DURATION: ${GRAFANA_IDLE_TIMEOUT:-15m}
-      GF_AUTH_LOGIN_MAXIMUM_LIFETIME_DURATION: ${GRAFANA_MAX_LOGIN:-8h}
+      GF_AUTH_LOGIN_MAXIMUM_INACTIVE_LIFETIME_DURATION: ${GRAFANA_IDLE_TIMEOUT:-30m}
+      GF_AUTH_LOGIN_MAXIMUM_LIFETIME_DURATION: ${GRAFANA_MAX_LOGIN:-12h}
       # Login through OpenID Connect with Authentik, off unless OIDC_ENABLED=true. The groups decide:
       # OIDC_ADMIN_GROUP becomes Admin, OIDC_VIEWER_GROUP Viewer, anyone else is refused. The local
       # administrator stays as the way in when Authentik is down.
